@@ -1,0 +1,247 @@
+---
+title: "Technical Assignment"
+author: "Roshan Shafiha"
+date: "6/29/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+```
+
+## Aim
+
+Identify chromosome location that could differentiate the samples into north and south.
+
+## Approach taken
+
+Identified important features through PCA and univariate wilcoxon test. Extracted the intersecting features between them and created complexheatmap to visualize the correlation between the selected features and samples.
+
+## Code 
+
+load the required library to run the script 
+
+```{r}
+library("tidyr")
+library("ggplot2")
+library("tibble")
+library("ComplexHeatmap")
+library("FactoMineR")
+```
+
+load the dataset
+
+```{r cars}
+
+data.1<-read.csv("exercise_data.csv",header = T)
+
+#merge the chromosome and position columns
+
+data.2<- data.1 %>%
+  unite("chromosome", Chromosome:Position, sep= "-", 
+        remove = T)
+
+data.2<- data.frame(data.2[,-1], row.names=data.2[,1])
+
+head(data.2)
+
+dim(data.2)
+
+```
+
+create the metadata that assigns the samples to its location
+
+```{r}
+
+samples<-colnames(data.2)
+
+location<-c("north","north","north","north","north","north","south","south","south","south","south","south")
+
+metadata<-data.frame(samples,location)
+
+head(metadata)
+
+
+```
+
+join the location column in the metadata to the transverse count data.
+
+```{r}
+
+data.3<-as.data.frame(t(data.2))
+
+data.4<-add_column(data.3, sample=as.factor(metadata$location), .before = 1)
+
+head(data.4[,1:10])
+
+```
+
+conduct PCA and observe how the samples are being clustered.
+
+```{r}
+
+pca <- PCA(data.4[,2:ncol(data.4)], scale.unit=TRUE, ncp=5,graph = FALSE)
+
+plot(pca, choix = "ind")
+
+```
+
+From the graph we can observe that the sample A are clustered in the left part of the graph while sample B are clustered in the right part.
+
+
+Lets observe the variance in the form of a boxplot.
+
+```{r}
+eigenvalues <- pca$eig
+
+barplot(eigenvalues[, 2], names.arg=1:nrow(eigenvalues), 
+       main = "Variances",
+       xlab = "Principal Components",
+       ylab = "Percentage of variances",
+       xlim=c(0,14), ylim=c(0,17),
+       col ="steelblue")
+lines(x = 1:nrow(eigenvalues), eigenvalues[, 2], 
+      type="b", pch=19, col = "red")
+
+```
+
+Extract the contribution of features to the PC1 (highest variance) and order it according to the feature which has the most contribution for the partition to the feature that has the least contribution.
+
+```{r}
+var<-as.data.frame(pca$var$contrib)
+
+dim1 <- var[order(-var$Dim.1),]
+
+dim1_positions<-(rownames(dim1)[1:500])
+
+head(dim1)
+```
+
+variable that consist of the top 500 feature that has the the most contribution in determining PC1 variance.
+
+```{r}
+
+head(dim1_positions)
+
+```
+
+scale the data
+
+```{r}
+
+scale_data<- scale(data.4[,2:ncol(data.4)],center=TRUE,scale=TRUE)
+
+summary(scale_data[,2:10])
+
+```
+
+Preprocess the dataset and assign variables for univariate analysis.
+
+```{r}
+
+data_stat<-as.data.frame(scale_data[,2:ncol(scale_data)])
+
+number.of.samples<-ncol(data_stat)
+
+input<-t(data_stat)
+
+# Create a output
+
+p.value.vector <- c()
+
+# Assign it to a list
+
+p.value.list <- numeric(number.of.samples)
+
+head(input)
+```
+
+number of features 
+
+```{r}
+features <-1:nrow(input)
+```
+
+conduct wilcoxon test
+
+```{r}
+for (i in features) {
+  north <- unlist(input[i, 1:6])
+  south <- unlist(input[i, 6:12])
+  wilcox.test.i <- wilcox.test(north, south,
+                               mu=0,
+                               alt="two.sided",
+                               p.adjust.method="BH",
+                               paired=F,
+                               conf.int=F,
+                               conf.level=0.95,
+                               exact=F
+  )
+  p.value.list[i] <- wilcox.test.i["p.value"]
+}
+```
+
+create a dataframe to store the p values.
+
+```{r}
+data.list.df <- paste(rownames(input))
+
+data.list.df<-as.data.frame(data.list.df)
+
+p.value_data<- data.frame(matrix(unlist(p.value.list ), nrow=length(p.value.list ), byrow=TRUE))
+
+colnames(p.value_data)<-"p.value"
+
+```
+
+Binding chromosome position list and pvalue to create dataframe. Further extract the chromosome positions having p value which are less than or equal to 0.05.
+
+```{r}
+wilcox.test.results <- cbind(data.list.df, p.value_data)
+
+wilcox.test.results_top<-wilcox.test.results[which(wilcox.test.results[,2] <= 0.05),]
+
+print(wilcox.test.results_top)
+```
+
+Find the intersecting chromosome position between the ones which were present in PC1 (showing highest efficiency in determining the variance between the sample) and the significant chromosome position identified by the univariate analysis - wilcoxon method.
+
+```{r}
+
+pca_wilcox<-intersect(wilcox.test.results_top$data.list.df,dim1_positions)
+
+print(pca_wilcox)
+
+```
+
+
+There are 6 chromosome position that are found to be common in both the PCA and Wilcoxon test and these 6 chromosome position is used to build a heatmap to visualize how the samples are being correlated to these identified position between north and south location.
+
+```{r}
+
+data_heatmap<-input[rownames(input) %in% pca_wilcox,]
+
+ht1 = Heatmap(data_heatmap[,1:6], name = "north", row_title = "", column_title = "north")
+ht2 = Heatmap(data_heatmap[,7:12], name = "south", row_title = "", column_title = "south")
+
+ht_list = ht1 + ht2
+
+draw(ht_list, row_title = "chromosome_position", row_title_gp = gpar(col = "black"),
+     column_title = "Comparison between north and south", column_title_side = "bottom")
+
+
+```
+
+
+## Result
+
+Chromosome position for differentiating the samples between the location (north vs south) are "chre-6076", "chrf-2792" "chrg-1823","chri-7617", "chrk-705".
+
+
+## Discussion
+
+From the visualization we can see that chromosome position - chrk-705,chrf-2792,chre-6076,chri7617 and chrg1823 are highly efficient in differentiating the samples between the location. These 5 genes are negatively correlated to the south location and positively correlated in some of the north samples while moderately correlated to the remaining north samples.
+
+These chromosome positions are believed to be able to different the samples from the regions they were obtained from.
